@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MENU="${HOME}/.local/bin/menus/_bemenu.sh"
+
+choice="$(
+  cat <<'EOF' | "$MENU" -p "power"
+lock
+logout
+reboot
+shutdown
+EOF
+)"
+
+case "${choice:-}" in
+  lock) exec swaylock -f ;;
+  logout) exec swaymsg exit ;;
+  reboot) exec systemctl reboot ;;
+  shutdown) exec systemctl poweroff ;;
+  *) exit 0 ;;
+esac
+

@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MENU="${HOME}/.local/bin/menus/_bemenu.sh"
+
+# Build lists from wpctl
+sinks_raw="$(wpctl status | awk '
+  /Sinks:/ {in_sinks=1; next}
+  /Sink endpoints:/ {in_sinks=0}
+  in_sinks && /^[[:space:]]*[0-9]+\./ {print}
+')"
+
+sources_raw="$(wpctl status | awk '
+  /Sources:/ {in_sources=1; next}
+  /Source endpoints:/ {in_sources=0}
+  in_sources && /^[[:space:]]*[0-9]+\./ {print}
+')"
+
+# Present a root audio menu first
+root_choice="$(
+  cat <<'EOF' | "$MENU" -p "audio"
+set output device
+set input device
+volume +5%
+volume -5%
+mute output toggle
+mute input toggle
+EOF
+)"
+
+case "${root_choice:-}" in
+  "set output device")
+    [ -n "${sinks_raw}" ] || exit 0
+    # Format: "ID | Name"
+    sink_choice="$(
+      echo "$sinks_raw" | sed -E 's/^[[:space:]]*([0-9]+)\.[[:space:]]*(.*)$/\1 | \2/' | "$MENU" -p "output"
+    )"
+    [ -n "${sink_choice:-}" ] || exit 0
+    sink_id="$(printf '%s' "$sink_choice" | awk -F'|' '{gsub(/ /,"",$1); print $1}')"
+    exec wpctl set-default "$sink_id"
+    ;;
+
+  "set input device")
+    [ -n "${sources_raw}" ] || exit 0
+    src_choice="$(
+      echo "$sources_raw" | sed -E 's/^[[:space:]]*([0-9]+)\.[[:space:]]*(.*)$/\1 | \2/' | "$MENU" -p "input"
+    )"
+    [ -n "${src_choice:-}" ] || exit 0
+    src_id="$(printf '%s' "$src_choice" | awk -F'|' '{gsub(/ /,"",$1); print $1}')"
+    exec wpctl set-default "$src_id"
+    ;;
+
+  "volume +5%")
+    exec wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+
+    ;;
+
+  "volume -5%")
+    exec wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-
+    ;;
+
+  "mute output toggle")
+    exec wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle
+    ;;
+
+  "mute input toggle")
+    exec wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle
+    ;;
+
+  *)
+    exit 0
+    ;;
+esac
+

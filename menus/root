@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MENU="${HOME}/.local/bin/menus/_bemenu.sh"
+
+choice="$(
+  printf '%s\n' apps audio network bluetooth power \
+  | "$MENU" -p "menu"
+)"
+
+case "${choice:-}" in
+  apps) exec "$HOME/.local/bin/menus/apps" ;;
+  audio) exec "$HOME/.local/bin/menus/audio" ;;
+  network) exec "$HOME/.local/bin/menus/network" ;;
+  bluetooth) exec "$HOME/.local/bin/menus/bluetooth" ;;
+  power) exec "$HOME/.local/bin/menus/power" ;;
+  *) exit 0 ;;
+esac

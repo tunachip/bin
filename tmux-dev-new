@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+BASE_DIR="${HOME}/Development"
+
+# Usage: dev-new <project-name>
+project_name="${1:-}"
+if [[ -z "$project_name" ]]; then
+  read -r -p "Project name: " project_name
+fi
+
+if [[ -z "${project_name// }" ]]; then
+  echo "Error: project name cannot be empty."
+  exit 1
+fi
+
+if [[ "$project_name" == *"/"* ]]; then
+  echo "Error: project name must not contain '/'."
+  exit 1
+fi
+
+project_dir="${BASE_DIR}/${project_name}"
+session_name="$(printf '%s' "$project_name" | tr ' .:' '___')"
+
+if [[ -e "$project_dir" ]]; then
+  echo "Error: project already exists: $project_dir"
+  exit 1
+fi
+
+mkdir -p "$project_dir"
+
+# Template
+mkdir -p \
+  "$project_dir/docs" \
+  "$project_dir/src" \
+
+touch \
+  "$project_dir/todo.md" \
+  "$project_dir/README.md"
+
+cat > "$project_dir/README.md" <<EOF
+# ${project_name}
+EOF
+
+# Git init + initial commit
+(
+  cd "$project_dir"
+  git init
+
+  # Fallback local identity if global isn't set
+  if ! git config --get user.name >/dev/null 2>&1; then
+    git config user.name "${USER:-dev}"
+  fi
+  if ! git config --get user.email >/dev/null 2>&1; then
+    git config user.email "${USER:-dev}@localhost"
+  fi
+
+  git add .
+  git commit -m "initial commit"
+)
+
+# Build tmux session with your template layout
+# window1: nvim todo.md
+# window2: nvim .
+# window3: nvim ./docs/
+# window4: term
+if tmux has-session -t "$session_name" 2>/dev/null; then
+  # Extremely unlikely right after creation, but safe guard
+  if [[ -n "${TMUX:-}" ]]; then
+    exec tmux switch-client -t "$session_name"
+  else
+    exec tmux attach -t "$session_name"
+  fi
+fi
+
+tmux new-session -d -s "$session_name" -c "$project_dir" -n TODO
+tmux send-keys -t "${session_name}:TODO" "nvim todo.md" C-m
+
+tmux new-window -t "$session_name" -n EDIT -c "$project_dir"
+tmux send-keys -t "${session_name}:EDIT" "nvim ." C-m
+
+tmux new-window -t "$session_name" -n DOCS -c "$project_dir"
+tmux send-keys -t "${session_name}:DOCS" "nvim ./docs/" C-m
+
+tmux new-window -t "$session_name" -n TERM -c "$project_dir"
+
+tmux select-window -t "${session_name}:TODO"
+
+# Switch to session at end
+if [[ -n "${TMUX:-}" ]]; then
+  exec tmux switch-client -t "$session_name"
+else
+  exec tmux attach -t "$session_name"
+fi
+

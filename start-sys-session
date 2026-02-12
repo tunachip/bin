@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SESSION="sys"
+KANATA_BIN="$HOME/.local/bin/kanata"
+KANATA_CFG="$HOME/.config/kanata/kanata.kbd"
+
+# If session doesn't exist, create detached session
+if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+  tmux new-session -d -s "$SESSION" -n sys
+fi
+
+# If kanata is already running, do nothing
+if pgrep -x kanata >/dev/null 2>&1; then
+  exit 0
+fi
+
+# Start kanata in the first pane of sys session
+tmux send-keys -t "${SESSION}:0.0" "exec \"$KANATA_BIN\" -c \"$KANATA_CFG\"" C-m
+

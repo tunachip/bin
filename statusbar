@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+
+while true; do
+    # === WIFI / IP ===
+    IP=$(ip -4 addr show wlan0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
+    if [ -n "$IP" ]; then
+        WIFI="|   $IP |"
+    else
+        WIFI="  not connected   "
+    fi
+
+    # === BATTERY ===
+    BAT=$(cat /sys/class/power_supply/BAT0/capacity 2>/dev/null)
+    if [ -n "$BAT" ]; then
+        if [ "$BAT" -lt 20 ]; then
+            BAT_COLOR="#FF0000"
+        elif [ "$BAT" -lt 50 ]; then
+            BAT_COLOR="#FFFF00"
+        else
+            BAT_COLOR="#00FF00"
+        fi
+        BATTERY=" <span foreground=\"$BAT_COLOR\">󰁹 $BAT%</span> |"
+    else
+        BATTERY=""
+    fi
+    # === VOLUME ===
+    VOL=$(wpctl get-volume @DEFAULT_AUDIO_SINK@ | awk '{printf "%d", $2*100}')
+    SOUND=" 󰕾 $VOL% |"
+    # === TIME ===
+    TIME=" 󰥔 $(date '+%H:%M:%S') "
+    # === JSON OUTPUT ===
+    echo "$WIFI$BATTERY$SOUND$TIME"
+
+    sleep 1
+done
+

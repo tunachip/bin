@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SESSION="home"
+HOME_DIR="$HOME"
+
+# Attach if already exists
+if tmux has-session -t "$SESSION" 2>/dev/null; then
+  exec tmux attach -t "$SESSION"
+fi
+
+# Create session
+tmux new-session -d -s "$SESSION" -n home -c "$HOME_DIR"
+
+# Ensure todo file exists
+touch "$HOME_DIR/todo.md"
+
+tmux split-window -h -t "${SESSION}:home" -c "$HOME_DIR"
+tmux send-keys -t "${SESSION}:home.0" 'nvim ~/todo.md' C-m
+tmux send-keys -t "${SESSION}:home.1" 'calcurse' C-m
+
+# Focus left pane by default
+tmux select-pane -t "${SESSION}:home.0"
+
+# Attach
+exec tmux attach -t "$SESSION"
+

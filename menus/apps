@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MENU="${HOME}/.local/bin/menus/_bemenu.sh"
+
+choice="$(
+  cat <<'EOF' | "$MENU" -p "launch"
+wezterm
+firefox
+neovide
+godot
+mypaint
+EOF
+)"
+
+case "${choice:-}" in
+  wezterm) exec wezterm ;;
+  firefox) exec firefox ;;
+  neovide) exec neovide ;;
+  godot) exec godot ;;
+  mypaint) exec mypaint ;;
+  *) exit 0 ;;
+esac
+
