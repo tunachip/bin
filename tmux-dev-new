@@ -32,7 +32,7 @@ mkdir -p "$project_dir"
 # Template
 mkdir -p \
   "$project_dir/docs" \
-  "$project_dir/src" \
+  "$project_dir/src"
 
 touch \
   "$project_dir/todo.md" \
@@ -92,4 +92,3 @@ if [[ -n "${TMUX:-}" ]]; then
 else
   exec tmux attach -t "$session_name"
 fi
-

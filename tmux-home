@@ -6,7 +6,11 @@ HOME_DIR="$HOME"
 
 # Attach if already exists
 if tmux has-session -t "$SESSION" 2>/dev/null; then
-  exec tmux attach -t "$SESSION"
+  if [[ -n "${TMUX:-}" ]]; then
+    exec tmux switch-client -t "$SESSION"
+  else
+    exec tmux attach -t "$SESSION"
+  fi
 fi
 
 # Create session
@@ -22,6 +26,9 @@ tmux send-keys -t "${SESSION}:home.1" 'calcurse' C-m
 # Focus left pane by default
 tmux select-pane -t "${SESSION}:home.0"
 
-# Attach
-exec tmux attach -t "$SESSION"
-
+# Attach/switch
+if [[ -n "${TMUX:-}" ]]; then
+  exec tmux switch-client -t "$SESSION"
+else
+  exec tmux attach -t "$SESSION"
+fi
