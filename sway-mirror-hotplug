@@ -1,0 +1,54 @@
+#!/usr/bin/env sh
+set -eu
+
+# Keep only one watcher instance across config reloads.
+exec 9>/tmp/sway-output-hotplug.lock
+flock -n 9 || exit 0
+
+log_file="/tmp/sway-output-hotplug.log"
+
+log() {
+    printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$log_file"
+}
+
+apply_output_policy() {
+    outputs_json="$(swaymsg -t get_outputs -r)"
+
+    internal_output="$(printf '%s\n' "$outputs_json" | jq -r '.[] | select(.name | test("^(eDP|LVDS)")) | .name' | head -n1)"
+    external_outputs="$(printf '%s\n' "$outputs_json" | jq -r '.[] | select(.name | test("^(eDP|LVDS)") | not) | .name')"
+    primary_external="$(printf '%s\n' "$external_outputs" | head -n1)"
+
+    log "internal=${internal_output:-none} external=${primary_external:-none}"
+
+    if [ -n "$primary_external" ]; then
+        swaymsg "output $primary_external enable pos 0 0" >/dev/null
+        [ -n "$internal_output" ] && swaymsg "output $internal_output disable" >/dev/null
+        printf '%s\n' "$external_outputs" | while IFS= read -r out; do
+            [ -n "$out" ] || continue
+            [ "$out" = "$primary_external" ] && continue
+            swaymsg "output $out disable" >/dev/null
+        done
+        return
+    fi
+
+    [ -n "$internal_output" ] || exit 0
+    swaymsg "output $internal_output enable pos 0 0" >/dev/null
+
+    printf '%s\n' "$outputs_json" | jq -r '.[] | select(.name | test("^(eDP|LVDS)") | not) | .name' \
+        | while IFS= read -r out; do
+            [ -n "$out" ] || continue
+            swaymsg "output $out disable" >/dev/null
+        done
+}
+
+if [ "${1:-}" = "--once" ]; then
+    apply_output_policy
+    exit 0
+fi
+
+apply_output_policy
+swaymsg -m -t subscribe '["output"]' \
+    | while IFS= read -r _; do
+        sleep 1
+        apply_output_policy
+    done

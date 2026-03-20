@@ -1,0 +1,48 @@
+#!/bin/sh
+set -eu
+
+dir=${1:-}
+case "$dir" in
+  right|left) ;;
+  *)
+    echo "usage: sway-next-empty {right|left}" >&2
+    exit 2
+    ;;
+esac
+
+workspaces_json=$(swaymsg -t get_workspaces -r)
+cur=$(printf '%s\n' "$workspaces_json" | jq -r '.[] | select(.focused) | .num')
+occupied=$(printf '%s\n' "$workspaces_json" | jq -r '.[].num')
+
+is_occupied() {
+  needle=$1
+  printf '%s\n' "$occupied" | grep -qx "$needle"
+}
+
+step=1
+target=""
+while [ "$step" -le 10 ]; do
+  if [ "$dir" = "right" ]; then
+    candidate=$(( (cur - 1 + step) % 10 + 1 ))
+  else
+    candidate=$(( (cur - 1 - step + 100) % 10 + 1 ))
+  fi
+
+  if ! is_occupied "$candidate"; then
+    target=$candidate
+    break
+  fi
+
+  step=$((step + 1))
+done
+
+if [ -n "$target" ]; then
+  swaymsg "move container to workspace number $target; workspace number $target" >/dev/null
+else
+  # All 1-10 are occupied; fall back to normal directional move.
+  if [ "$dir" = "right" ]; then
+    swaymsg "move container to workspace next; workspace next" >/dev/null
+  else
+    swaymsg "move container to workspace prev; workspace prev" >/dev/null
+  fi
+fi

@@ -10,6 +10,7 @@ firefox
 neovide
 godot
 mypaint
+dolphin
 EOF
 )"
 
@@ -19,6 +20,8 @@ case "${choice:-}" in
   neovide) exec neovide ;;
   godot) exec godot ;;
   mypaint) exec mypaint ;;
+	dolphin) exec dolphin ;;
+	steam) exec steam ;;
   *) exit 0 ;;
 esac
 

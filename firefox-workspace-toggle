@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Try to recover SWAYSOCK for shells that didn't inherit it (e.g. tmux/login shells).
+if [[ -z "${SWAYSOCK:-}" ]]; then
+  SWAYSOCK="$(sway --get-socketpath 2>/dev/null || true)"
+  export SWAYSOCK
+fi
+
+if ! swaymsg -t get_version >/dev/null 2>&1; then
+  echo "firefox-workspace-toggle.sh: unable to connect to Sway IPC (SWAYSOCK='${SWAYSOCK:-unset}')" >&2
+  exit 1
+fi
+
+python3 - <<'PY'
+import json
+import subprocess
+import time
+from pathlib import Path
+
+
+LOG_FILE = Path("/tmp/sway-firefox-workspace-toggle.log")
+
+
+def log(msg: str):
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with LOG_FILE.open("a", encoding="utf-8") as f:
+        f.write(f"[{ts}] {msg}\n")
+
+
+def run_swaymsg(command: str):
+    subprocess.run(["swaymsg", command], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def get_tree():
+    out = subprocess.check_output(["swaymsg", "-t", "get_tree"], text=True)
+    return json.loads(out)
+
+
+def get_workspaces():
+    out = subprocess.check_output(["swaymsg", "-t", "get_workspaces"], text=True)
+    return json.loads(out)
+
+
+def iter_nodes(node):
+    yield node
+    for c in node.get("nodes", []):
+        yield from iter_nodes(c)
+    for c in node.get("floating_nodes", []):
+        yield from iter_nodes(c)
+
+
+def is_firefox(n):
+    app_id = n.get("app_id")
+    wprops = n.get("window_properties") or {}
+    klass = wprops.get("class")
+    return app_id == "firefox" or klass == "Firefox"
+
+
+def find_firefox_windows(tree):
+    out = []
+
+    def walk(node, ws_name=None):
+        if node.get("type") == "workspace":
+            ws_name = node.get("name")
+        if node.get("type") == "con" and node.get("pid") and is_firefox(node):
+            out.append((node, ws_name))
+        for c in node.get("nodes", []):
+            walk(c, ws_name)
+        for c in node.get("floating_nodes", []):
+            walk(c, ws_name)
+
+    walk(tree, None)
+    return out
+
+
+def tile_one_third(con_id):
+    # Keep firefox in tiled mode and give it roughly one-third width.
+    run_swaymsg(f"[con_id={con_id}] floating disable, focus, move left, resize set width 33 ppt")
+
+
+tree = get_tree()
+workspaces = get_workspaces()
+focused_ws = next((w for w in workspaces if w.get("focused")), None)
+if not focused_ws:
+    log("no focused workspace from get_workspaces")
+    raise SystemExit(0)
+
+ws_name = focused_ws.get("name", "")
+
+firefox_windows = find_firefox_windows(tree)
+ff_on_current = [pair for pair in firefox_windows if pair[1] == ws_name]
+known_ids = {pair[0]["id"] for pair in firefox_windows}
+log(f"start ws={ws_name!r} firefox_total={len(firefox_windows)} on_current={len(ff_on_current)}")
+
+if ff_on_current:
+    # If firefox exists on the current workspace, send it to workspace 2.
+    cid = ff_on_current[0][0]["id"]
+    run_swaymsg(f"[con_id={cid}] move container to workspace number 2")
+    run_swaymsg(f"workspace \"{ws_name}\"")
+    log(f"moved current-workspace firefox con_id={cid} to workspace 2; stayed on ws={ws_name!r}")
+    raise SystemExit(0)
+
+# No firefox on current workspace: launch one and place it on current workspace.
+subprocess.Popen(["firefox"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+log("launched firefox process from current workspace")
+
+new_cid = None
+for _ in range(60):
+    time.sleep(0.1)
+    tree = get_tree()
+    wins = find_firefox_windows(tree)
+    for node, _workspace in wins:
+        cid = node["id"]
+        if cid not in known_ids:
+            new_cid = cid
+            break
+    if new_cid is not None:
+        break
+
+if new_cid is not None:
+    run_swaymsg(f"[con_id={new_cid}] move container to workspace \"{ws_name}\"")
+    run_swaymsg(f"workspace \"{ws_name}\"")
+    tile_one_third(new_cid)
+    run_swaymsg(f"workspace \"{ws_name}\"")
+    log(f"found new firefox con_id={new_cid}, moved to current ws={ws_name!r}, tiled one-third")
+else:
+    log("no firefox window detected after launch wait")
+PY
