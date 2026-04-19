@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-unset WAYLAND_DISPLAY
-export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-x11}"
 export BEMENU_BACKEND=x11
 
 exec bemenu \
+  --center \
+  --grab \
   --fn 'BlexMono Nerd Font 14' \
   --bdr '#525252' \
   --tb '#000000' \

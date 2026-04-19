@@ -1,27 +1,56 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MENU="${HOME}/.local/bin/menus/_bemenu.sh"
+MENU="${MENU:-${HOME}/.local/bin/menus/_fzf_i3.sh}"
+LOGFILE="${XDG_RUNTIME_DIR:-/tmp}/i3menu-launch.log"
+
+launch_detached() {
+  {
+    printf '[%s] launch:' "$(date '+%F %T')"
+    printf ' %q' "$@"
+    printf '\n'
+  } >>"$LOGFILE"
+
+  unset WAYLAND_DISPLAY
+  export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-x11}"
+  export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-i3}"
+  export XDG_SESSION_DESKTOP="${XDG_SESSION_DESKTOP:-i3}"
+
+  setsid -f "$@" >>"$LOGFILE" 2>&1 </dev/null || {
+    printf '[%s] failed to start:' "$(date '+%F %T')" >>"$LOGFILE"
+    printf ' %q' "$@" >>"$LOGFILE"
+    printf '\n' >>"$LOGFILE"
+  }
+  exit 0
+}
 
 choice="$(
   cat <<'EOF' | "$MENU" -p "launch"
-wezterm
 firefox
-neovide
+nvim
 godot
-mypaint
-dolphin
+paint
+files
+steam
+discord
+designer
+terminal
+obs
+kitty
 EOF
 )"
 
 case "${choice:-}" in
-  wezterm) exec wezterm ;;
-  firefox) exec firefox ;;
-  neovide) exec neovide ;;
-  godot) exec godot ;;
-  mypaint) exec mypaint ;;
-	dolphin) exec dolphin ;;
-	steam) exec steam ;;
+  firefox) launch_detached firefox ;;
+  paint) launch_detached env QT_QPA_PLATFORM=xcb kolourpaint ;;
+  godot) launch_detached godot ;;
+  files) launch_detached dolphin ;;
+  nvim) launch_detached neovide ;;
+  discord) launch_detached discord ;;
+  designer) launch_detached designer6 ;;
+  steam) launch_detached steam ;;
+  terminal) launch_detached wezterm start --always-new-process ;;
+	obs) launch_detatched obs-studio ;;
+  kitty) launch_detached wezterm start --always-new-process -- kitty ;;
   *) exit 0 ;;
 esac
-

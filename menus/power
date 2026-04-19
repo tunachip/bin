@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MENU="${HOME}/.local/bin/menus/_bemenu.sh"
+MENU="${MENU:-${HOME}/.local/bin/menus/_fzf_i3.sh}"
+LOCK_CMD="${LOCK_CMD:-i3lock}"
+LOGOUT_CMD="${LOGOUT_CMD:-i3-msg exit}"
 
 choice="$(
   cat <<'EOF' | "$MENU" -p "power"
@@ -13,10 +15,9 @@ EOF
 )"
 
 case "${choice:-}" in
-  lock) exec swaylock -f ;;
-  logout) exec swaymsg exit ;;
+  lock) exec ${=LOCK_CMD} ;;
+  logout) exec ${=LOGOUT_CMD} ;;
   reboot) exec systemctl reboot ;;
   shutdown) exec systemctl poweroff ;;
   *) exit 0 ;;
 esac
-

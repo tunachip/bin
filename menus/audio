@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MENU="${HOME}/.local/bin/menus/_bemenu.sh"
+MENU="${MENU:-${HOME}/.local/bin/menus/_fzf_i3.sh}"
 
 # Build lists from wpctl
 sinks_raw="$(wpctl status | awk '
@@ -70,4 +70,3 @@ case "${root_choice:-}" in
     exit 0
     ;;
 esac
-

@@ -1,0 +1,425 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MENU="${MENU:-${HOME}/.local/bin/menus/_fzf_i3.sh}"
+state_root="${XDG_STATE_HOME:-${HOME}/.local/state}/monitor-setups"
+profiles_dir="${state_root}/profiles"
+cache_file="${state_root}/current.tsv"
+
+ensure_state_dirs() {
+  mkdir -p "$profiles_dir"
+}
+
+current_layout_entries() {
+  xrandr --query | awk '
+    function clean_rate(rate) {
+      gsub(/[^0-9.]/, "", rate)
+      return rate
+    }
+
+    function flush() {
+      if (!active) {
+        return
+      }
+
+      print output "\t" mode "\t" rate "\t" pos_x "\t" pos_y "\t" primary
+      active = 0
+      output = ""
+      mode = ""
+      rate = ""
+      pos_x = 0
+      pos_y = 0
+      primary = 0
+    }
+
+    $2 == "connected" {
+      flush()
+
+      active = 0
+      output = $1
+      mode = ""
+      rate = ""
+      pos_x = 0
+      pos_y = 0
+      primary = 0
+
+      for (i = 3; i <= NF; i++) {
+        if ($i == "primary") {
+          primary = 1
+        }
+
+        if (match($i, /^([0-9]+x[0-9]+)([-+][0-9]+)([-+][0-9]+)$/, parts)) {
+          mode = parts[1]
+          pos_x = substr(parts[2], 2)
+          if (substr(parts[2], 1, 1) == "-") {
+            pos_x = "-" pos_x
+          }
+          pos_y = substr(parts[3], 2)
+          if (substr(parts[3], 1, 1) == "-") {
+            pos_y = "-" pos_y
+          }
+          active = 1
+        }
+      }
+
+      next
+    }
+
+    $2 == "disconnected" {
+      flush()
+      next
+    }
+
+    active && $1 == mode {
+      for (i = 2; i <= NF; i++) {
+        if ($i ~ /\*/) {
+          rate = clean_rate($i)
+        }
+      }
+    }
+
+    END {
+      flush()
+    }
+  '
+}
+
+cache_current_layout() {
+  ensure_state_dirs
+  current_layout_entries > "$cache_file"
+}
+
+connected_outputs() {
+  xrandr --query | awk '$2 == "connected" { print $1 }'
+}
+
+active_output_names() {
+  current_layout_entries | awk -F'\t' '{ print $1 }'
+}
+
+active_output_entries() {
+  current_layout_entries | awk -F'\t' '
+    {
+      label = $1 " | " $2 " @ " $3 "Hz | " $4 "," $5
+      if ($6 == "1") {
+        label = label " [primary]"
+      }
+
+      print label
+    }
+  '
+}
+
+mode_entries() {
+  local output="$1"
+
+  xrandr --query | awk -v output="$output" '
+    function clean_rate(rate) {
+      gsub(/[^0-9.]/, "", rate)
+      return rate
+    }
+
+    $1 == output && $2 == "connected" {
+      in_block = 1
+      next
+    }
+
+    in_block && $0 !~ /^ / {
+      exit
+    }
+
+    in_block && $1 ~ /^[0-9]+x[0-9]+$/ {
+      mode = $1
+
+      for (i = 2; i <= NF; i++) {
+        rate = clean_rate($i)
+        if (rate == "") {
+          continue
+        }
+
+        label = mode " @ " rate "Hz"
+        if ($i ~ /\*/) {
+          label = label " [current]"
+        }
+        if ($i ~ /\+/) {
+          label = label " [preferred]"
+        }
+
+        print label " | " mode " | " rate
+      }
+    }
+  '
+}
+
+select_mode() {
+  local output="$1"
+  local selection selected_mode selected_rate
+
+  selection="$(mode_entries "$output" | "$MENU" -p "$output")"
+  [[ -n "${selection:-}" ]] || return 1
+
+  selected_mode="$(printf '%s\n' "$selection" | awk -F' \\| ' '{print $(NF-1)}')"
+  selected_rate="$(printf '%s\n' "$selection" | awk -F' \\| ' '{print $NF}')"
+  printf '%s\t%s\n' "$selected_mode" "$selected_rate"
+}
+
+inactive_connected_outputs() {
+  local output active_output found
+  local -a active_outputs=()
+
+  mapfile -t active_outputs < <(active_output_names)
+
+  while IFS= read -r output; do
+    found=0
+
+    for active_output in "${active_outputs[@]}"; do
+      if [[ "$output" == "$active_output" ]]; then
+        found=1
+        break
+      fi
+    done
+
+    if [[ $found -eq 0 ]]; then
+      printf '%s\n' "$output"
+    fi
+  done < <(connected_outputs)
+}
+
+prompt_setup_name() {
+  local name
+
+  printf 'setup name> ' > /dev/tty
+  IFS= read -r name < /dev/tty || return 1
+  [[ -n "${name//[[:space:]]/}" ]] || return 1
+  printf '%s\n' "$name" | tr ' ' '-' | tr -cd '[:alnum:]_.-'
+}
+
+apply_saved_layout() {
+  local profile_file="$1"
+  local primary_output=""
+  local output mode rate pos_x pos_y primary
+  local -a lines=()
+  local -a all_outputs=()
+  local -a args=()
+  local -A enabled_outputs=()
+  local -A connected_lookup=()
+
+  mapfile -t lines < "$profile_file"
+  mapfile -t all_outputs < <(xrandr --query | awk '/ connected| disconnected/ { print $1 }')
+
+  while IFS= read -r output; do
+    connected_lookup["$output"]=1
+  done < <(connected_outputs)
+
+  for line in "${lines[@]}"; do
+    IFS=$'\t' read -r output mode rate pos_x pos_y primary <<< "$line"
+    [[ -n "${connected_lookup[$output]+x}" ]] || continue
+
+    if [[ "$primary" == "1" ]]; then
+      primary_output="$output"
+      break
+    fi
+  done
+
+  if [[ -z "$primary_output" ]]; then
+    for line in "${lines[@]}"; do
+      IFS=$'\t' read -r output mode rate pos_x pos_y primary <<< "$line"
+      [[ -n "${connected_lookup[$output]+x}" ]] || continue
+      primary_output="$output"
+      break
+    done
+  fi
+
+  [[ -n "$primary_output" ]] || exit 0
+
+  for line in "${lines[@]}"; do
+    IFS=$'\t' read -r output mode rate pos_x pos_y primary <<< "$line"
+    [[ -n "${connected_lookup[$output]+x}" ]] || continue
+
+    enabled_outputs["$output"]=1
+    args+=(--output "$output" --mode "$mode")
+    if [[ -n "$rate" ]]; then
+      args+=(--rate "$rate")
+    fi
+    args+=(--pos "${pos_x}x${pos_y}")
+    if [[ "$output" == "$primary_output" ]]; then
+      args+=(--primary)
+    fi
+  done
+
+  for output in "${all_outputs[@]}"; do
+    [[ -n "${enabled_outputs[$output]+x}" ]] && continue
+    args+=(--output "$output" --off)
+  done
+
+  xrandr "${args[@]}"
+  cache_current_layout
+}
+
+add_monitor() {
+  local output_selection selected_output mode_data selected_mode selected_rate
+  local reference_selection reference_output placement primary_choice
+  local -a active_outputs=()
+  local -a args=()
+
+  output_selection="$(inactive_connected_outputs | "$MENU" -p "add-monitor")"
+  [[ -n "${output_selection:-}" ]] || exit 0
+  selected_output="$output_selection"
+
+  mode_data="$(select_mode "$selected_output")" || exit 0
+  selected_mode="${mode_data%%$'\t'*}"
+  selected_rate="${mode_data#*$'\t'}"
+
+  args=(--output "$selected_output" --mode "$selected_mode" --rate "$selected_rate")
+  mapfile -t active_outputs < <(active_output_names)
+
+  if [[ ${#active_outputs[@]} -eq 0 ]]; then
+    args+=(--primary)
+  else
+    reference_selection="$(active_output_entries | "$MENU" -p "reference")"
+    [[ -n "${reference_selection:-}" ]] || exit 0
+    reference_output="${reference_selection%% | *}"
+
+    placement="$(printf '%s\n' right-of left-of above below | "$MENU" -p "place")"
+    [[ -n "${placement:-}" ]] || exit 0
+
+    case "$placement" in
+      right-of) args+=(--right-of "$reference_output") ;;
+      left-of) args+=(--left-of "$reference_output") ;;
+      above) args+=(--above "$reference_output") ;;
+      below) args+=(--below "$reference_output") ;;
+    esac
+
+    primary_choice="$(printf '%s\n' keep-primary make-primary | "$MENU" -p "primary")"
+    [[ -n "${primary_choice:-}" ]] || exit 0
+    if [[ "$primary_choice" == "make-primary" ]]; then
+      args+=(--primary)
+    fi
+  fi
+
+  xrandr "${args[@]}"
+  cache_current_layout
+}
+
+remove_monitor() {
+  local selection selected_output selected_primary new_primary
+  local active_count
+  local -a args=()
+
+  active_count="$(current_layout_entries | awk 'END { print NR }')"
+  [[ "$active_count" -gt 1 ]] || exit 0
+
+  selection="$(active_output_entries | "$MENU" -p "remove-monitor")"
+  [[ -n "${selection:-}" ]] || exit 0
+  selected_output="${selection%% | *}"
+
+  selected_primary="$(current_layout_entries | awk -F'\t' -v output="$selected_output" '$1 == output { print $6; exit }')"
+  new_primary="$(current_layout_entries | awk -F'\t' -v output="$selected_output" '$1 != output { print $1; exit }')"
+
+  args=(--output "$selected_output" --off)
+  if [[ "$selected_primary" == "1" && -n "$new_primary" ]]; then
+    args+=(--output "$new_primary" --primary)
+  fi
+
+  xrandr "${args[@]}"
+  cache_current_layout
+}
+
+update_monitor() {
+  local selection selected_output mode_data selected_mode selected_rate
+  local placement reference_selection reference_output primary_choice
+  local active_count
+  local -a args=()
+
+  selection="$(active_output_entries | "$MENU" -p "update-monitor")"
+  [[ -n "${selection:-}" ]] || exit 0
+  selected_output="${selection%% | *}"
+
+  mode_data="$(select_mode "$selected_output")" || exit 0
+  selected_mode="${mode_data%%$'\t'*}"
+  selected_rate="${mode_data#*$'\t'}"
+
+  args=(--output "$selected_output" --mode "$selected_mode" --rate "$selected_rate")
+
+  active_count="$(current_layout_entries | awk 'END { print NR }')"
+  if [[ "$active_count" -gt 1 ]]; then
+    placement="$(printf '%s\n' keep-position right-of left-of above below | "$MENU" -p "place")"
+    [[ -n "${placement:-}" ]] || exit 0
+
+    case "$placement" in
+      right-of|left-of|above|below)
+        reference_selection="$(
+          current_layout_entries \
+          | awk -F'\t' -v output="$selected_output" '$1 != output { print $1 " | " $2 " @ " $3 "Hz" }' \
+          | "$MENU" -p "reference"
+        )"
+        [[ -n "${reference_selection:-}" ]] || exit 0
+        reference_output="${reference_selection%% | *}"
+
+        case "$placement" in
+          right-of) args+=(--right-of "$reference_output") ;;
+          left-of) args+=(--left-of "$reference_output") ;;
+          above) args+=(--above "$reference_output") ;;
+          below) args+=(--below "$reference_output") ;;
+        esac
+        ;;
+    esac
+  fi
+
+  primary_choice="$(printf '%s\n' keep-primary make-primary | "$MENU" -p "primary")"
+  [[ -n "${primary_choice:-}" ]] || exit 0
+  if [[ "$primary_choice" == "make-primary" ]]; then
+    args+=(--primary)
+  fi
+
+  xrandr "${args[@]}"
+  cache_current_layout
+}
+
+save_monitor_setup() {
+  local layout setup_name
+
+  layout="$(current_layout_entries)"
+  [[ -n "${layout:-}" ]] || exit 0
+
+  setup_name="$(prompt_setup_name)" || exit 0
+  [[ -n "${setup_name:-}" ]] || exit 0
+
+  ensure_state_dirs
+  printf '%s\n' "$layout" > "$cache_file"
+  printf '%s\n' "$layout" > "${profiles_dir}/${setup_name}.tsv"
+}
+
+load_monitor_setup() {
+  local selection
+  local -a saved_profiles=()
+
+  ensure_state_dirs
+
+  shopt -s nullglob
+  for profile in "$profiles_dir"/*.tsv; do
+    saved_profiles+=("$(basename "${profile%.tsv}")")
+  done
+  shopt -u nullglob
+
+  [[ ${#saved_profiles[@]} -gt 0 ]] || exit 0
+
+  selection="$(printf '%s\n' "${saved_profiles[@]}" | "$MENU" -p "load-monitor-setup")"
+  [[ -n "${selection:-}" ]] || exit 0
+
+  apply_saved_layout "${profiles_dir}/${selection}.tsv"
+}
+
+choice="$(
+  printf '%s\n' add-monitor remove-monitor update-monitor save-monitor-setup load-monitor-setup \
+  | "$MENU" -p "display"
+)"
+
+case "${choice:-}" in
+  add-monitor) add_monitor ;;
+  remove-monitor) remove_monitor ;;
+  update-monitor) update_monitor ;;
+  save-monitor-setup) save_monitor_setup ;;
+  load-monitor-setup) load_monitor_setup ;;
+  *) exit 0 ;;
+esac

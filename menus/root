@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MENU="${HOME}/.local/bin/menus/_bemenu.sh"
+MENU="${MENU:-${HOME}/.local/bin/menus/_fzf_i3.sh}"
 
 choice="$(
-  printf '%s\n' apps audio network bluetooth power \
+  printf '%s\n' apps audio display network bluetooth power \
   | "$MENU" -p "menu"
 )"
 
 case "${choice:-}" in
   apps) exec "$HOME/.local/bin/menus/apps" ;;
   audio) exec "$HOME/.local/bin/menus/audio" ;;
+  display) exec "$HOME/.local/bin/menus/display" ;;
   network) exec "$HOME/.local/bin/menus/network" ;;
   bluetooth) exec "$HOME/.local/bin/menus/bluetooth" ;;
   power) exec "$HOME/.local/bin/menus/power" ;;

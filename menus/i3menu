@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MENU="${MENU:-${HOME}/.local/bin/menus/_fzf_i3.sh}"
+
+choice="$(
+  printf '%s\n' apps audio display network bluetooth power \
+  | "$MENU" -p "menu"
+)"
+
+case "${choice:-}" in
+  apps) exec env MENU="$MENU" "$HOME/.local/bin/menus/apps" ;;
+  audio) exec env MENU="$MENU" "$HOME/.local/bin/menus/audio" ;;
+  display) exec env MENU="$MENU" "$HOME/.local/bin/menus/display" ;;
+  network) exec "$HOME/.local/bin/menus/network" ;;
+  bluetooth) exec "$HOME/.local/bin/menus/bluetooth" ;;
+  power)
+    exec env \
+      MENU="$MENU" \
+      LOCK_CMD="i3lock" \
+      LOGOUT_CMD="i3-msg exit" \
+      "$HOME/.local/bin/menus/power"
+    ;;
+  *) exit 0 ;;
+esac
