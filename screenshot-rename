@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+default_dir="${HOME}/Pictures/Screenshots"
+pictures_dir="$(xdg-user-dir PICTURES 2>/dev/null || true)"
+
+if [[ -n "${pictures_dir}" && "${pictures_dir}" != "${HOME}" ]]; then
+  screenshot_dir="${SCREENSHOT_DIR:-${pictures_dir}/Screenshots}"
+else
+  screenshot_dir="${SCREENSHOT_DIR:-${default_dir}}"
+fi
+
+rename_prompt() {
+  local source_path="$1"
+  local source_dir current_name new_name target_path
+
+  if [[ ! -f "${source_path}" ]]; then
+    printf 'Screenshot file is missing: %s\n' "${source_path}"
+    printf 'Press Enter to close...'
+    read -r _
+    exit 1
+  fi
+
+  source_dir="$(dirname -- "${source_path}")"
+  current_name="$(basename -- "${source_path}")"
+
+  printf 'Saved screenshot:\n%s\n\n' "${source_path}"
+  printf 'Copied to clipboard.\n\n'
+  printf 'Enter a new filename, or press Enter to keep it.\n'
+  printf 'Name: '
+  read -r new_name
+
+  if [[ -z "${new_name}" ]]; then
+    printf '\nKeeping %s\n' "${current_name}"
+    printf 'Press Enter to close...'
+    read -r _
+    exit 0
+  fi
+
+  if [[ "${new_name}" == */* ]]; then
+    printf '\nFilenames cannot contain "/".\n'
+    printf 'Press Enter to close...'
+    read -r _
+    exit 1
+  fi
+
+  if [[ "${new_name}" != *.png ]]; then
+    new_name="${new_name}.png"
+  fi
+
+  target_path="${source_dir}/${new_name}"
+
+  if [[ "${target_path}" != "${source_path}" && -e "${target_path}" ]]; then
+    printf '\nTarget already exists: %s\n' "${target_path}"
+    printf 'Press Enter to close...'
+    read -r _
+    exit 1
+  fi
+
+  if [[ "${target_path}" != "${source_path}" ]]; then
+    mv -- "${source_path}" "${target_path}"
+  fi
+
+  printf '\nFinal file:\n%s\n' "${target_path}"
+  printf 'Press Enter to close...'
+  read -r _
+}
+
+launch_popup() {
+  local target_path="$1"
+
+  unset WAYLAND_DISPLAY
+  export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-x11}"
+  export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-i3}"
+  export XDG_SESSION_DESKTOP="${XDG_SESSION_DESKTOP:-i3}"
+
+  exec wezterm start \
+    --always-new-process \
+    --class menu-popup \
+    --cwd "${screenshot_dir}" \
+    -- bash -lc 'exec "$1" --rename "$2"' _ "$0" "${target_path}"
+}
+
+main() {
+  local timestamp target_path
+
+  if [[ "${1:-}" == "--rename" ]]; then
+    if [[ $# -ne 2 ]]; then
+      printf 'Usage: %s --rename /path/to/file\n' "$0" >&2
+      exit 1
+    fi
+    rename_prompt "$2"
+    exit 0
+  fi
+
+  mkdir -p -- "${screenshot_dir}"
+  timestamp="$(date +%Y-%m-%d_%H-%M-%S)"
+  target_path="${screenshot_dir}/screenshot_${timestamp}.png"
+
+  maim -s "${target_path}"
+  xclip -selection clipboard -t image/png -i "${target_path}"
+
+  launch_popup "${target_path}"
+}
+
+main "$@"

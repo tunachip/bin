@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source ~/.local/share/theme/colors.sh
+
+IP_VISIBILITY_FILE="${XDG_RUNTIME_DIR:-/tmp}/statusbar-ip-visible"
+
+json_escape() {
+    local s="${1//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\n'/ }"
+    printf '%s' "$s"
+}
+
+emit_block() {
+    local text="$1"
+    local color="${2:-$FG}"
+    printf '{"full_text":"%s","color":"%s","separator":false,"separator_block_width":0}' \
+      "$(json_escape "$text")" \
+      "$color"
+}
+
+printf '{"version":1}\n[\n[]\n'
+
+while true; do
+    blocks=()
+
+    ip="$(ip -4 addr show wlan0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || true)"
+    if [ -n "$ip" ]; then
+        if [ "$(cat "$IP_VISIBILITY_FILE" 2>/dev/null || true)" = "1" ]; then
+            wifi_text="|   $ip |"
+        else
+            wifi_text="|   connected |"
+        fi
+    else
+        wifi_text="   not connected "
+    fi
+    blocks+=("$(emit_block "$wifi_text" "$FG")")
+
+    bat="$(cat /sys/class/power_supply/BAT0/capacity 2>/dev/null || true)"
+    if [ -n "$bat" ]; then
+        if [ "$bat" -lt 20 ]; then
+            bat_color="$RED"
+        elif [ "$bat" -lt 50 ]; then
+            bat_color="$YELLOW"
+        else
+            bat_color="$GREEN"
+        fi
+        blocks+=("$(emit_block " 󰁹 $bat% |" "$bat_color")")
+    fi
+
+    vol_info="$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null || true)"
+    if [ -n "$vol_info" ]; then
+        vol="$(awk '{printf "%d", $2 * 100}' <<<"$vol_info")"
+        vol_fmt="$(printf "%3d" "$vol")"
+        if [[ "$vol_info" == *"[MUTED]"* ]] || [ "$vol" -eq 0 ]; then
+            blocks+=("$(emit_block " 󰖁 ${vol_fmt}% |" "$RED")")
+        else
+            blocks+=("$(emit_block " 󰕾 ${vol_fmt}% |" "$FG")")
+        fi
+    fi
+
+    time_text=" 󰥔 $(date '+%H:%M:%S') "
+    blocks+=("$(emit_block "$time_text" "$FG")")
+
+    printf ',[%s]\n' "$(IFS=,; printf '%s' "${blocks[*]}")"
+    sleep 1
+done

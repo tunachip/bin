@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+STATE_FILE="${XDG_RUNTIME_DIR:-/tmp}/statusbar-ip-visible"
+
+usage() {
+    echo "usage: statusbar-ip [toggle|show|hide|status]" >&2
+    exit 1
+}
+
+set_visible() {
+    printf '%s\n' "$1" > "$STATE_FILE"
+}
+
+get_visible() {
+    [ "$(cat "$STATE_FILE" 2>/dev/null)" = "1" ]
+}
+
+case "${1:-toggle}" in
+    toggle)
+        if get_visible; then
+            set_visible 0
+            echo "hidden"
+        else
+            set_visible 1
+            echo "shown"
+        fi
+        ;;
+    show)
+        set_visible 1
+        echo "shown"
+        ;;
+    hide)
+        set_visible 0
+        echo "hidden"
+        ;;
+    status)
+        if get_visible; then
+            echo "shown"
+        else
+            echo "hidden"
+        fi
+        ;;
+    *)
+        usage
+        ;;
+esac

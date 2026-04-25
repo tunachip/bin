@@ -2,13 +2,19 @@
 
 source ~/.local/share/theme/colors.sh
 
+IP_VISIBILITY_FILE="${XDG_RUNTIME_DIR:-/tmp}/statusbar-ip-visible"
+
 while true; do
     # === WIFI / IP ===
     IP=$(ip -4 addr show wlan0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
     if [ -n "$IP" ]; then
-        WIFI="|   $IP |"
+        if [ "$(cat "$IP_VISIBILITY_FILE" 2>/dev/null)" = "1" ]; then
+            WIFI="|   $IP |"
+        else
+            WIFI="|   connected |"
+        fi
     else
-        WIFI="  not connected   "
+        WIFI="   not connected  "
     fi
 
     # === BATTERY ===
@@ -25,11 +31,20 @@ while true; do
     else
         BATTERY=""
     fi
+
     # === VOLUME ===
-    VOL=$(wpctl get-volume @DEFAULT_AUDIO_SINK@ | awk '{printf "%d", $2*100}')
-    SOUND=" 󰕾 $VOL% |"
+    VOL_INFO=$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null)
+    VOL=$(awk '{printf "%d", $2 * 100}' <<<"$VOL_INFO")
+    VOL_FMT=$(printf "%3d" "$VOL")
+    if [[ "$VOL_INFO" == *"[MUTED]"* ]] || [ "$VOL" -eq 0 ]; then
+        SOUND=" <span foreground=\"$RED\">󰖁</span> ${VOL_FMT}% |"
+    else
+        SOUND=" 󰕾 ${VOL_FMT}% |"
+    fi
+
     # === TIME ===
     TIME=" 󰥔 $(date '+%H:%M:%S') "
+
     # === JSON OUTPUT ===
     echo "$WIFI$BATTERY$SOUND$TIME"
 

@@ -18,10 +18,29 @@ apply_output_policy() {
     external_outputs="$(printf '%s\n' "$outputs_json" | jq -r '.[] | select(.name | test("^(eDP|LVDS)") | not) | .name')"
     primary_external="$(printf '%s\n' "$external_outputs" | head -n1)"
 
+    best_mode_for() {
+        output_name="$1"
+
+        printf '%s\n' "$outputs_json" | jq -r --arg output_name "$output_name" '
+            .[]
+            | select(.name == $output_name)
+            | ([ .modes[]? ] | sort_by((.width * .height), .refresh) | last)
+            | select(. != null)
+            | "\(.width)x\(.height)@\(.refresh / 1000)Hz"
+        ' | head -n1
+    }
+
     log "internal=${internal_output:-none} external=${primary_external:-none}"
 
     if [ -n "$primary_external" ]; then
-        swaymsg "output $primary_external enable pos 0 0" >/dev/null
+        external_mode="$(best_mode_for "$primary_external")"
+        log "external_mode=${external_mode:-auto}"
+
+        if [ -n "$external_mode" ]; then
+            swaymsg "output $primary_external mode $external_mode scale 1 enable pos 0 0" >/dev/null
+        else
+            swaymsg "output $primary_external enable pos 0 0" >/dev/null
+        fi
         [ -n "$internal_output" ] && swaymsg "output $internal_output disable" >/dev/null
         printf '%s\n' "$external_outputs" | while IFS= read -r out; do
             [ -n "$out" ] || continue

@@ -3,7 +3,7 @@ set -euo pipefail
 
 SESSION="sys"
 KANATA_BIN="$HOME/.local/bin/kanata"
-KANATA_CFG="$HOME/.config/kanata/config.kbd"
+KANATA_CFG="$HOME/.config/kanata/new_config.kbd"
 
 # If session doesn't exist, create detached session
 if ! tmux has-session -t "$SESSION" 2>/dev/null; then

@@ -1,0 +1,152 @@
+#!/usr/bin/env sh
+set -eu
+
+usage() {
+    cat <<'EOF'
+Usage:
+  sway-pick-output-mode [output]
+  sway-pick-output-mode --list [output]
+  sway-pick-output-mode --set <output> <mode>
+
+Examples:
+  sway-pick-output-mode
+  sway-pick-output-mode DP-3
+  sway-pick-output-mode --list DP-3
+  sway-pick-output-mode --set DP-3 3840x2160@60Hz
+EOF
+}
+
+mode_string() {
+    width="$1"
+    height="$2"
+    refresh="$3"
+
+    if [ $((refresh % 1000)) -eq 0 ]; then
+        printf '%sx%s@%sHz' "$width" "$height" $((refresh / 1000))
+    else
+        printf '%sx%s@%.3fHz' "$width" "$height" "$(awk "BEGIN { printf $refresh / 1000 }")"
+    fi
+}
+
+list_outputs() {
+    printf '%s\n' "$outputs_json" | jq -r '
+        .[]
+        | select(.active == true)
+        | .name
+    '
+}
+
+default_output() {
+    printf '%s\n' "$outputs_json" | jq -r '
+        (
+          [ .[] | select(.active == true and (.name | test("^(eDP|LVDS)") | not)) | .name ][0]
+          // [ .[] | select(.active == true) | .name ][0]
+          // empty
+        )
+    ' | head -n1
+}
+
+list_modes() {
+    output_name="$1"
+
+    printf '%s\n' "$outputs_json" | jq -r --arg output_name "$output_name" '
+        .[]
+        | select(.name == $output_name)
+        | .modes[]?
+        | [
+            .width,
+            .height,
+            .refresh,
+            (if .current then "current" else "" end),
+            (if .preferred then "preferred" else "" end)
+          ]
+        | @tsv
+    '
+}
+
+print_modes() {
+    output_name="$1"
+    index=1
+
+    list_modes "$output_name" | while IFS="$(printf '\t')" read -r width height refresh current preferred; do
+        [ -n "${width:-}" ] || continue
+        mode="$(mode_string "$width" "$height" "$refresh")"
+        tags=""
+        [ -n "$current" ] && tags="$tags current"
+        [ -n "$preferred" ] && tags="$tags preferred"
+        printf '%2s. %s%s\n' "$index" "$mode" "$tags"
+        index=$((index + 1))
+    done
+}
+
+select_mode() {
+    output_name="$1"
+    tmp_file="$(mktemp)"
+    trap 'rm -f "$tmp_file"' EXIT HUP INT TERM
+
+    list_modes "$output_name" >"$tmp_file"
+    if [ ! -s "$tmp_file" ]; then
+        printf 'No modes found for %s\n' "$output_name" >&2
+        exit 1
+    fi
+
+    printf 'Available modes for %s:\n' "$output_name"
+    print_modes "$output_name"
+    printf 'Select mode number: '
+    IFS= read -r selection
+
+    case "$selection" in
+        ''|*[!0-9]*)
+            printf 'Invalid selection: %s\n' "$selection" >&2
+            exit 1
+            ;;
+    esac
+
+    chosen_line="$(sed -n "${selection}p" "$tmp_file")"
+    if [ -z "$chosen_line" ]; then
+        printf 'No mode at index %s\n' "$selection" >&2
+        exit 1
+    fi
+
+    width="$(printf '%s\n' "$chosen_line" | cut -f1)"
+    height="$(printf '%s\n' "$chosen_line" | cut -f2)"
+    refresh="$(printf '%s\n' "$chosen_line" | cut -f3)"
+    chosen_mode="$(mode_string "$width" "$height" "$refresh")"
+
+    printf 'Applying %s to %s\n' "$chosen_mode" "$output_name"
+    swaymsg "output $output_name mode $chosen_mode enable" >/dev/null
+}
+
+outputs_json="$(swaymsg -t get_outputs -r)"
+
+case "${1:-}" in
+    -h|--help)
+        usage
+        exit 0
+        ;;
+    --set)
+        [ $# -eq 3 ] || {
+            usage >&2
+            exit 1
+        }
+        swaymsg "output $2 mode $3 enable" >/dev/null
+        exit 0
+        ;;
+    --list)
+        output_name="${2:-$(default_output)}"
+        [ -n "$output_name" ] || {
+            printf 'No active outputs found\n' >&2
+            exit 1
+        }
+        print_modes "$output_name"
+        exit 0
+        ;;
+esac
+
+output_name="${1:-$(default_output)}"
+[ -n "$output_name" ] || {
+    printf 'No active outputs found\n' >&2
+    exit 1
+}
+
+select_mode "$output_name"

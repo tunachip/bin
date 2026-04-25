@@ -194,6 +194,95 @@ prompt_setup_name() {
   printf '%s\n' "$name" | tr ' ' '-' | tr -cd '[:alnum:]_.-'
 }
 
+display_property_entries() {
+  xrandr --verbose | awk '
+    function trim(value) {
+      sub(/^[[:space:]]+/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      return value
+    }
+
+    function flush_property() {
+      if (!in_property || output == "" || property == "") {
+        return
+      }
+
+      lower_property = tolower(property)
+      if (lower_property ~ /(saturation|vibrance)/) {
+        print output "\t" property "\t" current_value "\t" range_value
+      }
+
+      in_property = 0
+      property = ""
+      current_value = ""
+      range_value = ""
+    }
+
+    $2 == "connected" {
+      flush_property()
+      output = $1
+      next
+    }
+
+    /^[^[:space:]]/ {
+      flush_property()
+      output = ""
+      next
+    }
+
+    output != "" && /^[[:space:]]+[[:graph:]][^:]*:/ {
+      flush_property()
+
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      split(line, parts, ":")
+
+      property = trim(parts[1])
+      current_value = trim(substr(line, index(line, ":") + 1))
+      range_value = ""
+      in_property = 1
+      next
+    }
+
+    in_property && output != "" && /^[[:space:]]+range:[[:space:]]*\(/ {
+      line = $0
+      sub(/^[[:space:]]+range:[[:space:]]*\(/, "", line)
+      sub(/\).*/, "", line)
+      range_value = trim(line)
+      next
+    }
+
+    END {
+      flush_property()
+    }
+  '
+}
+
+display_property_labels() {
+  display_property_entries | awk -F'\t' '
+    {
+      label = $1 " | " $2
+      if ($3 != "") {
+        label = label " | current=" $3
+      }
+      if ($4 != "") {
+        label = label " | range=" $4
+      }
+      print label
+    }
+  '
+}
+
+prompt_property_value() {
+  local prompt="$1"
+  local value
+
+  printf '%s> ' "$prompt" > /dev/tty
+  IFS= read -r value < /dev/tty || return 1
+  [[ -n "${value//[[:space:]]/}" ]] || return 1
+  printf '%s\n' "$value"
+}
+
 apply_saved_layout() {
   local profile_file="$1"
   local primary_output=""
@@ -410,8 +499,50 @@ load_monitor_setup() {
   apply_saved_layout "${profiles_dir}/${selection}.tsv"
 }
 
+set_display_property() {
+  local selection selected_output selected_property current_value range_value prompt value
+  local property_data
+
+  selection="$(display_property_labels | "$MENU" -p "display-property")"
+  [[ -n "${selection:-}" ]] || exit 0
+
+  property_data="$(
+    display_property_entries \
+      | awk -F'\t' -v selection="$selection" '
+          {
+            label = $1 " | " $2
+            if ($3 != "") {
+              label = label " | current=" $3
+            }
+            if ($4 != "") {
+              label = label " | range=" $4
+            }
+
+            if (label == selection) {
+              print $0
+              exit
+            }
+          }
+        '
+  )"
+  [[ -n "${property_data:-}" ]] || exit 0
+
+  IFS=$'\t' read -r selected_output selected_property current_value range_value <<< "$property_data"
+
+  prompt="$selected_output $selected_property"
+  if [[ -n "$current_value" ]]; then
+    prompt="$prompt current=$current_value"
+  fi
+  if [[ -n "$range_value" ]]; then
+    prompt="$prompt range=$range_value"
+  fi
+
+  value="$(prompt_property_value "$prompt")" || exit 0
+  xrandr --output "$selected_output" --set "$selected_property" "$value"
+}
+
 choice="$(
-  printf '%s\n' add-monitor remove-monitor update-monitor save-monitor-setup load-monitor-setup \
+  printf '%s\n' add-monitor remove-monitor update-monitor set-saturation save-monitor-setup load-monitor-setup \
   | "$MENU" -p "display"
 )"
 
@@ -419,6 +550,7 @@ case "${choice:-}" in
   add-monitor) add_monitor ;;
   remove-monitor) remove_monitor ;;
   update-monitor) update_monitor ;;
+  set-saturation) set_display_property ;;
   save-monitor-setup) save_monitor_setup ;;
   load-monitor-setup) load_monitor_setup ;;
   *) exit 0 ;;

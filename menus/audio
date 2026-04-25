@@ -3,6 +3,58 @@ set -euo pipefail
 
 MENU="${MENU:-${HOME}/.local/bin/menus/_fzf_i3.sh}"
 
+output_profiles_raw() {
+  pactl list cards 2>/dev/null | awk -v RS='' '
+    {
+      card_name = ""
+      active_profile = ""
+
+      if (match($0, /\n[[:space:]]*Name: ([^\n]+)/, m)) {
+        card_name = m[1]
+      }
+
+      if (match($0, /\n[[:space:]]*Active Profile: ([^\n]+)/, m)) {
+        active_profile = m[1]
+      }
+
+      if (card_name == "") {
+        next
+      }
+
+      count = split($0, lines, /\n/)
+      in_profiles = 0
+
+      for (i = 1; i <= count; i++) {
+        line = lines[i]
+
+        if (line ~ /^[[:space:]]*Profiles:$/) {
+          in_profiles = 1
+          continue
+        }
+
+        if (line ~ /^[[:space:]]*Active Profile:/) {
+          in_profiles = 0
+        }
+
+        if (!in_profiles) {
+          continue
+        }
+
+        if (!match(line, /^[[:space:]]*([^:]+(:[^:]+)*): (.*) \(sinks: [0-9]+, sources: [0-9]+, priority: [0-9]+, available: (yes|no)\)$/, profile)) {
+          continue
+        }
+
+        if (profile[1] !~ /^output:/ || profile[4] != "yes") {
+          continue
+        }
+
+        marker = (profile[1] == active_profile ? "* " : "  ")
+        printf "%s%s | %s | %s\n", marker, profile[3], card_name, profile[1]
+      }
+    }
+  '
+}
+
 # Build lists from wpctl
 sinks_raw="$(wpctl status | awk '
   /Sinks:/ {in_sinks=1; next}
@@ -20,6 +72,7 @@ sources_raw="$(wpctl status | awk '
 root_choice="$(
   cat <<'EOF' | "$MENU" -p "audio"
 set output device
+set output profile
 set input device
 volume +5%
 volume -5%
@@ -38,6 +91,19 @@ case "${root_choice:-}" in
     [ -n "${sink_choice:-}" ] || exit 0
     sink_id="$(printf '%s' "$sink_choice" | awk -F'|' '{gsub(/ /,"",$1); print $1}')"
     exec wpctl set-default "$sink_id"
+    ;;
+
+  "set output profile")
+    output_profiles="$(output_profiles_raw)"
+    [ -n "${output_profiles}" ] || exit 0
+    profile_choice="$(
+      printf '%s\n' "$output_profiles" | "$MENU" -p "profile"
+    )"
+    [ -n "${profile_choice:-}" ] || exit 0
+    profile_name="${profile_choice##* | }"
+    card_name="${profile_choice% | *}"
+    card_name="${card_name##* | }"
+    exec pactl set-card-profile "$card_name" "$profile_name"
     ;;
 
   "set input device")

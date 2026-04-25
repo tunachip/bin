@@ -1,3 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
-exec wezterm start --always-new-process -- nmtui
+
+if command -v i3-msg >/dev/null 2>&1; then
+  i3-msg 'resize set 1200 900, move position center' >/dev/null 2>&1 || true
+fi
+
+exec wlctl

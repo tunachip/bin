@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+history_file="${HISTFILE:-$HOME/.histfile}"
+
+usage() {
+  cat <<'EOF'
+Usage: hist-run [--print]
+
+Pick a command from zsh history with skim and either print it or execute it.
+If skim is unavailable, fzf is used as a fallback.
+EOF
+}
+
+picker=()
+if command -v sk >/dev/null 2>&1; then
+  picker=(sk --height 40% --reverse --prompt 'History> ')
+elif command -v fzf >/dev/null 2>&1; then
+  picker=(fzf --height 40% --reverse --prompt 'History> ')
+else
+  printf 'hist-run: neither skim (sk) nor fzf is installed\n' >&2
+  exit 1
+fi
+
+if [[ ! -r "$history_file" ]]; then
+  printf 'hist-run: history file not readable: %s\n' "$history_file" >&2
+  exit 1
+fi
+
+mode="run"
+case "${1:-}" in
+  "")
+    ;;
+  --print)
+    mode="print"
+    ;;
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  *)
+    usage >&2
+    exit 1
+    ;;
+esac
+
+selected="$(
+  awk '
+    {
+      line = $0
+      sub(/^: [0-9]+:[0-9]+;/, "", line)
+      if (line == "") {
+        next
+      }
+      lines[++count] = line
+    }
+    END {
+      for (i = count; i >= 1; --i) {
+        if (!seen[lines[i]]++) {
+          print lines[i]
+        }
+      }
+    }
+  ' "$history_file" | "${picker[@]}"
+)" || exit 0
+
+[[ -n "$selected" ]] || exit 0
+
+if [[ "$mode" == "print" ]]; then
+  printf '%s\n' "$selected"
+  exit 0
+fi
+
+printf 'Running: %s\n' "$selected" >&2
+exec zsh -ic "$selected"
