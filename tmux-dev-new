@@ -35,11 +35,88 @@ mkdir -p \
   "$project_dir/src"
 
 touch \
-  "$project_dir/todo.md" \
-  "$project_dir/README.md"
+  "$project_dir/TODO.md" \
+  "$project_dir/README.md" \
+	"$project_dir/.gitignore"
 
 cat > "$project_dir/README.md" <<EOF
 # ${project_name}
+EOF
+
+cat > "$project_dir/.gitignore" <<EOF
+# === Env / Secrets ===
+.env
+.env.*
+!.env.example
+*.local
+*.pem
+*.key
+
+# === Logs ===
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+.venv/
+venv/
+env/
+ENV/
+pip-wheel-metadata/
+dist/
+build/
+*.egg-info/
+.ipynb_checkpoints/
+
+# === JavaScript / TypeScript ===
+node_modules/
+npm-debug.log*
+yarn.lock
+pnpm-lock.yaml
+.pnp.*
+.next/
+.nuxt/
+.svelte-kit/
+astro-env.d.ts
+dist/
+build/
+coverage/
+*.tsbuildinfo
+vite.config.*.timestamp-*
+vite.config.*.mjs.timestamp-*
+
+# === Rust ===
+target/
+Cargo.lock
+
+# === Package manager caches ===
+.npm/
+.yarn/cache/
+.yarn/unplugged/
+.yarn/build-state.yml
+.yarn/install-state.gz
+.pnpm-store/
+
+# === Temporary files ===
+tmp/
+temp/
+.cache/
+.parcel-cache/
+.eslintcache
 EOF
 
 # Git init + initial commit
@@ -60,7 +137,7 @@ EOF
 )
 
 # Build tmux session with your template layout
-# window1: nvim todo.md
+# window1: nvim TODO.md
 # window2: nvim .
 # window3: nvim ./docs/
 # window4: term
@@ -74,7 +151,7 @@ if tmux has-session -t "$session_name" 2>/dev/null; then
 fi
 
 tmux new-session -d -s "$session_name" -c "$project_dir" -n TODO
-tmux send-keys -t "${session_name}:TODO" "nvim todo.md" C-m
+tmux send-keys -t "${session_name}:TODO" "nvim TODO.md" C-m
 
 tmux new-window -t "$session_name" -n EDIT -c "$project_dir"
 tmux send-keys -t "${session_name}:EDIT" "nvim ." C-m

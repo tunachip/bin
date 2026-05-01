@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+workspace="${1:-$PWD}"
+
+cd "$workspace"
+
+set +e
+tmux-podman "$workspace"
+status=$?
+set -e
+
+if [[ "$status" -ne 0 ]]; then
+  printf '\ntmux-podman exited with status %s.\n' "$status" >&2
+  printf 'Workspace: %s\n' "$workspace" >&2
+  printf 'Press Enter to open a shell here, or Ctrl-D to close this tmux session.\n' >&2
+  read -r _ || exit "$status"
+  exec "${SHELL:-/bin/sh}" -l
+fi

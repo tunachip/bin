@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: grex-rg [OPTIONS] [STRING ...] [-- RG_ARG ...]
+
+Generate an inclusive regex with grex, search with ripgrep, then either page
+the raw matches or choose a matching file interactively.
+
+Examples:
+  grex-rg foo bar
+  printf '%s\n' foo bar | grex-rg -- src -g '*.py'
+  grex-rg --page foo bar
+  grex-rg --pick foo bar -- ~/code
+
+Controls:
+  first breakpoint: Enter opens picker, Ctrl-P pages rg results
+  picker: Enter opens selected file in $EDITOR, Ctrl-P prints absolute path
+
+Options:
+  --page          page rg results immediately
+  --pick          open picker immediately
+  -h, --help      show this help
+
+Arguments before -- are passed to grex as example strings. If none are given,
+grex-rg reads examples from standard input. Arguments after -- are passed to rg.
+EOF
+}
+
+mode="ask"
+grex_inputs=()
+rg_args=()
+after_delim=0
+
+while (($#)); do
+  if ((after_delim)); then
+    rg_args+=("$1")
+    shift
+    continue
+  fi
+
+  case "$1" in
+    --)
+      after_delim=1
+      ;;
+    --page)
+      mode="page"
+      ;;
+    --pick)
+      mode="pick"
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      grex_inputs+=("$1")
+      ;;
+  esac
+  shift
+done
+
+need() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    printf 'grex-rg: missing required command: %s\n' "$1" >&2
+    exit 1
+  fi
+}
+
+need grex
+need rg
+need realpath
+
+picker=()
+if command -v sk >/dev/null 2>&1; then
+  picker=(sk --layout=reverse --height=100% --prompt 'match files> ')
+elif command -v fzf >/dev/null 2>&1; then
+  picker=(fzf --layout=reverse --height=100% --prompt 'match files> ')
+else
+  printf 'grex-rg: neither skim (sk) nor fzf is installed\n' >&2
+  exit 1
+fi
+
+tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/grex-rg.XXXXXX")"
+trap 'rm -rf "$tmpdir"' EXIT
+
+pattern_file="$tmpdir/pattern"
+results_file="$tmpdir/results"
+files_file="$tmpdir/files"
+
+if ((${#grex_inputs[@]})); then
+  grex --no-anchors "${grex_inputs[@]}" >"$pattern_file"
+else
+  grex --no-anchors - >"$pattern_file"
+fi
+
+pattern="$(<"$pattern_file")"
+if [[ -z "$pattern" ]]; then
+  printf 'grex-rg: grex produced an empty pattern\n' >&2
+  exit 1
+fi
+
+rg_status=0
+rg --vimgrep --color=never -e "$pattern" "${rg_args[@]}" >"$results_file" || rg_status=$?
+case "$rg_status" in
+  0)
+    ;;
+  1)
+    printf 'grex-rg: no matches for generated pattern: %s\n' "$pattern" >&2
+    exit 1
+    ;;
+  *)
+    exit "$rg_status"
+    ;;
+esac
+
+rg -l --color=never -e "$pattern" "${rg_args[@]}" |
+  while IFS= read -r file; do
+    realpath "$file"
+  done >"$files_file"
+
+page_results() {
+  pager=()
+  if [[ -n "${PAGER:-}" ]]; then
+    read -r -a pager <<<"$PAGER"
+  else
+    pager=(less -R)
+  fi
+  "${pager[@]}" "$results_file"
+}
+
+pick_file() {
+  preview='pattern=$(cat '"$pattern_file"'); rg --color=always --line-number --column --context 3 -e "$pattern" -- {}'
+  selected="$(
+    "${picker[@]}" \
+      --expect=ctrl-p,enter \
+      --preview="$preview" \
+      --preview-window=right:60%:+1 \
+      <"$files_file"
+  )" || exit 0
+
+  [[ -n "$selected" ]] || exit 0
+
+  key="$(printf '%s\n' "$selected" | sed -n '1p')"
+  file="$(printf '%s\n' "$selected" | sed -n '2p')"
+
+  if [[ -z "$file" ]]; then
+    file="$key"
+    key="enter"
+  fi
+
+  [[ -n "$file" ]] || exit 0
+
+  case "$key" in
+    ctrl-p)
+      printf '%s\n' "$file"
+      ;;
+    enter|"")
+      editor=()
+      if [[ -n "${EDITOR:-}" ]]; then
+        read -r -a editor <<<"$EDITOR"
+      else
+        editor=(nvim)
+      fi
+
+      line="$(
+        rg --line-number --max-count 1 -e "$pattern" -- "$file" |
+          sed -n 's/^\([0-9][0-9]*\):.*/\1/p;q'
+      )"
+
+      case "$(basename "${editor[0]}")" in
+        nvim|vim|vi|view|nvim-qt|neovide)
+          if [[ -n "$line" ]]; then
+            exec "${editor[@]}" "+$line" "$file"
+          fi
+          ;;
+      esac
+
+      exec "${editor[@]}" "$file"
+      ;;
+  esac
+}
+
+case "$mode" in
+  page)
+    page_results
+    ;;
+  pick)
+    pick_file
+    ;;
+  ask)
+    if [[ ! -t 0 || ! -t 1 ]]; then
+      pick_file
+      exit $?
+    fi
+
+    printf 'regex: %s\n' "$pattern" >&2
+    printf 'matches: %s lines in %s files\n' "$(wc -l <"$results_file")" "$(wc -l <"$files_file")" >&2
+    printf 'Enter: picker, Ctrl-P: page results, Ctrl-C: cancel ' >&2
+
+    IFS= read -rsn1 key || exit 0
+    printf '\n' >&2
+
+    case "$key" in
+      $'\x10')
+        page_results
+        ;;
+      "")
+        pick_file
+        ;;
+      *)
+        exit 0
+        ;;
+    esac
+    ;;
+esac

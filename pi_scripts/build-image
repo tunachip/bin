@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+image="${PI_PODMAN_IMAGE:-localhost/pi-dev-env}"
+version="${PI_AGENT_VERSION:-0.70.2}"
+
+exec podman build \
+  --tag "$image" \
+  --build-arg "PI_AGENT_VERSION=$version" \
+  --file "$script_dir/Containerfile" \
+  "$script_dir"

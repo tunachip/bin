@@ -1,0 +1,276 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+IMAGE="${PI_PODMAN_IMAGE:-localhost/pi-dev-env}"
+AGENT_DIR="${PI_CODING_AGENT_HOST_DIR:-$HOME/.local/share/pi-agent}"
+CONTAINER_PREFIX="${PI_PODMAN_CONTAINER_PREFIX:-pi-harness}"
+REMOTE_USER="${PI_PODMAN_SSH_USER:-root}"
+SSH_HOST="${PI_PODMAN_SSH_HOST:-127.0.0.1}"
+SSH_CONTAINER_PORT="${PI_PODMAN_SSH_CONTAINER_PORT:-2222}"
+SSH_DIR="$AGENT_DIR/ssh"
+
+podman_network() {
+  if [[ -n "${PI_PODMAN_NETWORK:-}" ]]; then
+    printf '%s\n' "$PI_PODMAN_NETWORK"
+  elif command -v slirp4netns >/dev/null 2>&1; then
+    printf 'slirp4netns\n'
+  elif command -v pasta >/dev/null 2>&1; then
+    printf 'pasta\n'
+  else
+    printf 'bridge\n'
+  fi
+}
+
+usage() {
+  printf 'Usage: %s [ssh|start|status|stop|logs|exec] [workspace] [-- command...]\n' "$(basename "$0")"
+}
+
+die() {
+  printf 'tmux-podman: %s\n' "$*" >&2
+  exit 1
+}
+
+need() {
+  command -v "$1" >/dev/null 2>&1 || die "$1 not found"
+}
+
+workspace_path() {
+  local workspace="${1:-$PWD}"
+  if [[ "$workspace" != /* ]]; then
+    workspace="$PWD/$workspace"
+  fi
+  printf '%s\n' "$workspace"
+}
+
+container_name() {
+  local workspace="$1"
+  local base hash safe_base
+  base="$(basename "$workspace")"
+  safe_base="$(printf '%s' "$base" | tr -c '[:alnum:]_.-' '-')"
+  hash="$(printf '%s' "$workspace" | sha256sum | awk '{print substr($1, 1, 12)}')"
+  printf '%s-%s-%s\n' "$CONTAINER_PREFIX" "$safe_base" "$hash"
+}
+
+ensure_ssh_state() {
+  mkdir -p "$SSH_DIR"
+  chmod 700 "$SSH_DIR"
+
+  if [[ ! -f "$SSH_DIR/client_ed25519" ]]; then
+    ssh-keygen -q -t ed25519 -N '' -f "$SSH_DIR/client_ed25519" -C "pi-podman@${HOSTNAME:-localhost}"
+  fi
+
+  if [[ ! -f "$SSH_DIR/ssh_host_ed25519_key" ]]; then
+    ssh-keygen -q -t ed25519 -N '' -f "$SSH_DIR/ssh_host_ed25519_key"
+  fi
+
+  cp "$SSH_DIR/client_ed25519.pub" "$SSH_DIR/authorized_keys"
+  chmod 600 "$SSH_DIR/client_ed25519" "$SSH_DIR/ssh_host_ed25519_key" "$SSH_DIR/authorized_keys"
+
+  {
+    printf 'Port %s\n' "$SSH_CONTAINER_PORT"
+    printf 'ListenAddress 0.0.0.0\n'
+    printf 'HostKey /pi-agent/ssh/ssh_host_ed25519_key\n'
+    printf 'AuthorizedKeysFile /pi-agent/ssh/authorized_keys\n'
+    printf 'PidFile /tmp/pi-harness-sshd.pid\n'
+    printf 'PermitRootLogin yes\n'
+    printf 'PubkeyAuthentication yes\n'
+    printf 'PasswordAuthentication no\n'
+    printf 'KbdInteractiveAuthentication no\n'
+    printf 'UsePAM no\n'
+    printf 'StrictModes no\n'
+    printf 'X11Forwarding no\n'
+    printf 'AllowTcpForwarding yes\n'
+    printf 'PermitTTY yes\n'
+    printf 'Subsystem sftp internal-sftp\n'
+  } >"$SSH_DIR/sshd_config"
+  chmod 600 "$SSH_DIR/sshd_config"
+}
+
+container_running() {
+  local container="$1"
+  [[ "$(podman inspect -f '{{.State.Running}}' "$container" 2>/dev/null || true)" == "true" ]]
+}
+
+container_exists() {
+  local err rc
+  set +e
+  err="$(podman container exists "$1" 2>&1 >/dev/null)"
+  rc=$?
+  set -e
+
+  case "$rc" in
+    0)
+      return 0
+      ;;
+    1)
+      if [[ -n "$err" ]]; then
+        printf '%s\n' "$err" >&2
+        die "podman could not check container state"
+      fi
+      return 1
+      ;;
+    *)
+      die "podman could not check container state"
+      ;;
+  esac
+}
+
+image_available() {
+  local err rc
+  set +e
+  err="$(podman image exists "$IMAGE" 2>&1 >/dev/null)"
+  rc=$?
+  set -e
+
+  case "$rc" in
+    0)
+      return 0
+      ;;
+    1)
+      if [[ -n "$err" ]]; then
+        printf '%s\n' "$err" >&2
+        die "podman could not check image state"
+      fi
+      return 1
+      ;;
+    *)
+      printf '%s\n' "$err" >&2
+      die "podman could not check image state"
+      ;;
+  esac
+}
+
+ssh_port() {
+  local container="$1"
+  podman port "$container" "$SSH_CONTAINER_PORT/tcp" | awk -F: 'NF {print $NF; exit}'
+}
+
+start_container() {
+  local workspace="$1"
+  local container="$2"
+
+  need ssh-keygen
+  mkdir -p "$workspace" "$AGENT_DIR"
+  ensure_ssh_state
+
+  if container_exists "$container"; then
+    if ! container_running "$container"; then
+      podman start "$container" >/dev/null
+    fi
+    return
+  fi
+
+  if ! image_available && [[ "${PI_PODMAN_ALLOW_PULL:-0}" != "1" ]]; then
+    die "image not found locally: $IMAGE; build/tag it or set PI_PODMAN_IMAGE. Set PI_PODMAN_ALLOW_PULL=1 to let podman run pull."
+  fi
+
+  podman run -d \
+    --name "$container" \
+    --userns=keep-id \
+    --user=0:0 \
+    --network="$(podman_network)" \
+    -p "$SSH_HOST::$SSH_CONTAINER_PORT" \
+    -e PI_CODING_AGENT_DIR=/pi-agent \
+    -v "$workspace:/workspace:Z" \
+    -v "$AGENT_DIR:/pi-agent:Z" \
+    -w /workspace \
+    "$IMAGE" \
+    sh -lc 'mkdir -p /run/sshd /var/run/sshd; sshd="$(command -v sshd || true)"; if [ -z "$sshd" ]; then sshd=/usr/sbin/sshd; fi; if [ ! -x "$sshd" ]; then echo "sshd not found in image" >&2; sleep infinity; fi; exec "$sshd" -D -e -f /pi-agent/ssh/sshd_config' >/dev/null
+}
+
+ssh_into_container() {
+  local container="$1"
+  shift
+  local port
+  port="$(ssh_port "$container")"
+  [[ -n "$port" ]] || die "could not find published SSH port for $container"
+
+  if [[ $# -eq 0 ]]; then
+    exec ssh \
+      -i "$SSH_DIR/client_ed25519" \
+      -p "$port" \
+      -t \
+      -o IdentitiesOnly=yes \
+      -o StrictHostKeyChecking=accept-new \
+      -o UserKnownHostsFile="$SSH_DIR/known_hosts" \
+      "$REMOTE_USER@$SSH_HOST" \
+      'cd /workspace && exec "${SHELL:-/bin/sh}" -l'
+  fi
+
+  exec ssh \
+    -i "$SSH_DIR/client_ed25519" \
+    -p "$port" \
+    -o IdentitiesOnly=yes \
+    -o StrictHostKeyChecking=accept-new \
+    -o UserKnownHostsFile="$SSH_DIR/known_hosts" \
+    "$REMOTE_USER@$SSH_HOST" \
+    "$@"
+}
+
+action="${1:-ssh}"
+case "$action" in
+  ssh|start|status|stop|logs|exec)
+    shift || true
+    ;;
+  -h|--help|help)
+    usage
+    exit 0
+    ;;
+  *)
+    action="ssh"
+    ;;
+esac
+
+workspace_arg="${1:-$PWD}"
+if [[ "${1:-}" == "--" ]]; then
+  workspace_arg="$PWD"
+elif [[ $# -gt 0 ]]; then
+  shift
+fi
+
+workspace="$(workspace_path "$workspace_arg")"
+container="$(container_name "$workspace")"
+
+if [[ "${1:-}" == "--" ]]; then
+  shift
+fi
+
+need podman
+
+case "$action" in
+  start)
+    start_container "$workspace" "$container"
+    printf '%s\n' "$container"
+    ;;
+  ssh)
+    need ssh
+    need ssh-keygen
+    start_container "$workspace" "$container"
+    ssh_into_container "$container" "$@"
+    ;;
+  exec)
+    start_container "$workspace" "$container"
+    if [[ $# -eq 0 ]]; then
+      exec podman exec -it "$container" sh
+    fi
+    exec podman exec -it "$container" "$@"
+    ;;
+  status)
+    if container_exists "$container"; then
+      podman ps -a --filter "name=^${container}$" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+    else
+      printf 'No container for %s (%s)\n' "$workspace" "$container"
+    fi
+    ;;
+  stop)
+    if container_exists "$container"; then
+      podman stop "$container" >/dev/null
+      printf 'Stopped %s\n' "$container"
+    else
+      printf 'No container for %s (%s)\n' "$workspace" "$container"
+    fi
+    ;;
+  logs)
+    exec podman logs -f "$container"
+    ;;
+esac
